@@ -2,9 +2,6 @@
 
 > Native browser automation extension for [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent), offering an unrestricted, local-first alternative to Claude Code's built-in Chrome integration (`claude-in-chrome`).
 
-**Author**: ZheNing Hu ([adlternative@gmail.com](mailto:adlternative@gmail.com))  
-**License**: MIT  
-
 ---
 
 ## ⚖️ Comparison with Claude Code's Built-in Chrome
