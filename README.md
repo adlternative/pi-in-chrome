@@ -1,141 +1,142 @@
 # Pi in Chrome (`pi-in-chrome`)
 
-> 🚀 **Reverse-engineered from Claude Code's built-in Chrome extension (`claude-in-chrome`)**, completely replicated as a native extension for the **Pi Coding Agent (`@earendil-works/pi-coding-agent`)** paired with an **unrestricted standalone Chrome MV3 browser automation extension**.
+> Native browser automation extension for [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent), offering an unrestricted, local-first alternative to Claude Code's built-in Chrome integration (`claude-in-chrome`).
 
 **Author**: ZheNing Hu ([adlternative@gmail.com](mailto:adlternative@gmail.com))  
 **License**: MIT  
 
 ---
 
-## 📖 Architecture & Reverse Engineering Background
+## ⚖️ Comparison with Claude Code's Built-in Chrome
 
-Through deep reverse engineering (REA) and AST static auditing of the Claude Code CLI binary (`claude.exe`) and the official Chrome extension (`fcoeoabgfenejglbffodgkkbkcdhcgfn`), we reconstructed the native browser automation bridge and completely eliminated all official cloud restrictions:
-
-```mermaid
-flowchart TD
-    subgraph PiAgent["Pi Coding Agent (@earendil-works/pi-coding-agent)"]
-        Tools["20 Browser MCP Tools\n(mcp__claude-in-chrome__*)"]
-        LocalModel["🧠 Local Pi LLM (Ollama / DeepSeek / Private Models)\nPerforms 100% of reasoning & element matching"]
-        Exec["Automation Pipeline (ChromeExecutionManager)\n- Local file upload to Base64 (<=10MB)\n- Screenshot save_to_disk support"]
-        Pool["Multi-Instance SocketPool\n- Scans /tmp/pi-mcp-browser-bridge-* & /tmp/claude-mcp-browser-bridge-*\n- Aggregates availableTabs & routes via tabId"]
-        LocalModel --> PiAgent
-        Tools --> Exec --> Pool
-    end
-
-    subgraph NativeHosts["Chrome Native Messaging Host"]
-        NH["~/.claude/chrome/chrome-native-host\n(Executes bin/native-host.mjs)"]
-        NHManifest1["com.pi.chrome_browser_extension.json"]
-        NHManifest2["com.anthropic.claude_code_browser_extension.json"]
-        NHManifest1 -.-> NH
-        NHManifest2 -.-> NH
-    end
-
-    subgraph Chrome["Google Chrome Browser"]
-        Ext["Standalone Extension (Pi in Chrome)\nID: jlgmmfgplddjhfbfhnohfnjhdbpnalka\n- 0 Cloud Network Requests\n- 0 Permission Popups or 30s Timeouts\n- 0 Sensitive Field Redactions\n- Dedicated Pi Tab Group Sandbox"]
-        DOM["Web Page DOM (Including http://localhost:3000)\n- accessibility-tree.js generates ref_X\n- agent-visual-indicator.js frame states"]
-        Ext --> DOM
-    end
-
-    Pool <-->|"4-Byte UInt32LE + JSON (Unix Domain Socket)"| NH
-    NH <-->|"stdio (4-Byte UInt32LE + JSON)"| Ext
-```
-
----
-
-## 🌟 Comparison & Unrestricted Features
-
-| Feature | Official Claude Extension (`fcoeoabgfenejglbffodgkkbkcdhcgfn`) | Standalone Replicated Extension (`Pi in Chrome`) |
+| Feature | Claude Code (`claude-in-chrome`) | Pi in Chrome (`pi-in-chrome`) |
 | :--- | :--- | :--- |
-| **URL Safety Checks** | Cloud `url_hash_check` fails on offline / `localhost` apps | **Local Always-Pass (`category0`)**: Zero external requests, full support for `localhost:3000` |
-| **Permission Popups** | Opens 600×600 popup; fails with 30s timeout if unclicked | **Zero Popups**: Automated actions pass without modal interruption |
-| **JS Content Redaction** | Replaces `author` fields, URL parameters, Base64 with `[BLOCKED]` | **100% Raw Data**: No destructive modifications or censoring |
-| **Tab Group Isolation** | Confined strictly to yellow Claude group | **Dedicated `Pi` Tab Group Sandbox**: Protects user personal tabs while allowing drag-in adoption |
-| **Element Search Inference** | Secretly sends page DOM to Anthropic Cloud Claude API | **100% Local Inference**: Uses your local Pi model directly, zero data leakage |
-| **Account & Login** | Force redirects to `claude.ai/oauth/authorize` on install | **Pure Standalone**: Zero third-party account or API token requirements |
-| **Auto-Reconnect** | Stops permanently on socket disconnect | **Self-Healing**: 3-second heartbeat and `chrome.alarms` background reconnect |
+| **URL Safety Verification** | Blocks unverified URLs; calls Anthropic cloud `url_hash_check`; fails on offline / `localhost` apps | **Local Always-Pass (`category0`)**: Zero external network requests; seamlessly accesses `localhost`, intranets, and custom ports |
+| **Permission Confirmation** | Pops up a 600×600 modal window; aborts automation with timeout error if unclicked within 30 seconds | **Zero Popups**: Automated actions proceed immediately without interactive modal interruptions |
+| **JavaScript Content Censorship** | Redacts URL parameters, query strings, and keys matching `/author\|auth\|token\|session/i` with `[BLOCKED]` | **100% Raw Data**: Unaltered evaluation results returned directly to the agent |
+| **Tab Isolation & Safety** | Fixed to Anthropic's yellow tab group | **Dedicated `Pi` Tab Sandbox**: Confines agent actions to its own tab group to protect your personal browsing tabs |
+| **Semantic Element Search** | Extension internally calls cloud Anthropic API (`claude-3-5-haiku`) | **Driven by Pi's Active Model**: Uses Pi's own configured local or remote model, keeping all webpage data private |
+| **Account & Login Requirement** | Mandates `claude.ai` account login and OAuth consent | **100% Standalone**: Works offline with zero third-party account or API key dependencies |
+| **Native Host Reconnection** | Single attempt on launch; dies permanently on disconnect | **Self-Healing**: Automatic 3-second heartbeat and background reconnect loop via `chrome.alarms` |
 
 ---
 
-## 🛠 Complete 20-Tool MCP Browser Suite
+## 📦 Installation
 
-1. **Page Structure & Text Extraction**:
-   - `read_page`: Extract structured accessibility tree with unique `[ref_X]` identifiers.
-   - `get_page_text`: Extract clean reader-friendly text from article contents.
-   - `find`: Natural language element locator with fast local token scoring.
-2. **CDP Physical Mouse & Keyboard Emulation**:
-   - `computer`: (`click`, `mouse_down`, `mouse_up`, `right_click`, `double_click`, `triple_click`, `middle_click`, `drag`, `scroll_at`, `type`, `key_down`, `key_up`, `key_press`, `zoom`, `screenshot`).
-   - `form_input`: Form control typing and value binding.
-3. **Navigation & Execution**:
-   - `navigate`: Navigate to URL, forward, or backward in history.
-   - `javascript_tool`: Execute JavaScript expressions directly in page context and receive raw outputs.
-   - `file_upload` / `upload_image`: Inject local files into file inputs automatically as Base64 payloads.
-4. **Diagnostic & Monitoring**:
-   - `read_console_messages`: Capture console logs (`log`, `warn`, `error`) and stack traces in real time.
-   - `read_network_requests`: Inspect active network requests and HTTP responses.
-5. **Tab Management & Batching**:
-   - `tabs_context_mcp` / `tabs_create_mcp` / `tabs_close_mcp`: Tab lifecycle and sandboxed group discovery.
-   - `browser_batch`: Sequence multiple actions in one round-trip (dramatically accelerates multi-step tasks).
+### Option 1: Install via Pi Package Manager (Recommended)
 
----
+Install directly from GitHub into your user settings (`~/.pi/agent/settings.json`):
 
-## 🚀 Quick Setup (1 Minute)
-
-### Step 1: Install Native Messaging Host Manifests
-Run the setup script inside this project:
 ```bash
-npm run setup
+pi install git:github.com/adlternative/pi-in-chrome
 ```
-This automatically registers the Native Messaging Host manifests for all installed Chromium browsers (Google Chrome, Brave, Arc, Microsoft Edge, Chromium, Vivaldi, Opera).
 
-### Step 2: Load Unpacked Chrome Extension
-1. Open `chrome://extensions` in Google Chrome (or Edge/Brave/Arc).
-2. Toggle on **"Developer mode"** in the top-right corner.
-3. Click **"Load unpacked"** in the top-left corner.
-4. Select the directory:
-   ```
-   pi-in-chrome/chrome-extension
-   ```
-5. The extension (`Pi`) will load with deterministic ID `jlgmmfgplddjhfbfhnohfnjhdbpnalka` and the official Pi geometric logo.
+Or install locally from a cloned repository:
 
----
+```bash
+pi install /path/to/pi-in-chrome
+```
 
-## 💻 Usage with Pi Coding Agent
+To try without installing:
 
-### Automatic Global Loading (Recommended)
-Place an extension loader in `~/.pi/agent/extensions/pi-chrome.ts`:
+```bash
+pi -e git:github.com/adlternative/pi-in-chrome
+```
+
+### Option 2: Manual Extension Loading
+
+Add the path to `~/.pi/agent/settings.json`:
+
+```json
+{
+  "extensions": [
+    "/path/to/pi-in-chrome/src/index.ts"
+  ]
+}
+```
+
+Or create a loader script in `~/.pi/agent/extensions/pi-chrome.ts`:
+
 ```typescript
 import extension from "/path/to/pi-in-chrome/src/index.ts";
 export default extension;
 ```
-Once added, launch `pi` in any directory to automatically enable all browser automation capabilities:
-
-```bash
-# Start interactive Pi session
-pi
-```
-
-You can prompt Pi naturally:
-* *"Open http://localhost:3000 and check if the homepage renders without errors"*
-* *"Click the submit button in the current tab"*
-* *"Take a screenshot of the page and inspect the layout"*
-
-### Non-Interactive Single-Shot Execution
-```bash
-pi -p "Open http://localhost:3000 using the browser and tell me the page title"
-```
-
-### Dedicated Slash Commands
-- `/chrome status`: View socket connection status, active bridges, and open tabs.
-- `/chrome tabs`: List all tabs currently managed inside the Pi sandbox group.
-- `/chrome reconnect`: Force scan and reconnect to active browser sockets.
-- `/chrome enable` / `/chrome disable`: Toggle browser tool availability for the current session.
 
 ---
 
-## 🧪 Automated End-to-End Testing
+## 🚀 One-Time Setup (2 Steps)
 
-Run the live test suite to verify connectivity and tool execution with your running Chrome instance:
+### Step 1: Register Native Messaging Host
+In the project directory, run:
+
+```bash
+npm run setup
+```
+
+This registers the native messaging host manifest across all installed Chromium browsers (Google Chrome, Brave, Arc, Microsoft Edge, Chromium, Vivaldi, Opera).
+
+### Step 2: Load the Unpacked Chrome Extension
+1. Open `chrome://extensions` in Google Chrome.
+2. Toggle on **"Developer mode"** in the top-right corner.
+3. Click **"Load unpacked"** in the top-left corner.
+4. Select the `chrome-extension/` directory from this repository.
+5. The extension (`Pi`) will appear with ID `jlgmmfgplddjhfbfhnohfnjhdbpnalka` and the multi-color Pi logo.
+
+---
+
+## 💻 Usage
+
+Once installed, launch `pi` in any directory. The browser automation tools are automatically available:
+
+```bash
+# Interactive mode
+pi
+```
+
+### Example Prompts:
+* *"Open http://localhost:3000 and check if the homepage renders without errors"*
+* *"Inspect the page console logs and report any runtime warnings"*
+* *"Fill out the contact form and click submit"*
+* *"Take a screenshot of the dashboard and save it to disk"*
+
+### Non-Interactive CLI Mode:
+```bash
+pi -p "Open http://localhost:3000 in the browser and return the page title"
+```
+
+### Built-in Slash Commands:
+* `/chrome status`: Display Native Host connection status, active sockets, and discovered tabs.
+* `/chrome tabs`: List active browser tabs in the Pi tab group.
+* `/chrome reconnect`: Force scan and reconnect to browser sockets.
+* `/chrome enable` / `/chrome disable`: Toggle browser automation tools for the current session.
+
+---
+
+## 🛠 Available Browser Tools
+
+| Tool Name | Description |
+| :--- | :--- |
+| `tabs_context_mcp` | Discover available tabs and create/manage sandboxed Pi tab groups |
+| `navigate` | Navigate to URLs, or go back/forward in browsing history |
+| `read_page` | Extract full DOM semantic accessibility tree with `[ref_X]` identifiers |
+| `get_page_text` | Extract reader-mode plain text from the active page |
+| `find` | Locate page elements using natural language query scoring |
+| `computer` | Physical CDP input: `click`, `type`, `mouse_down`, `mouse_up`, `drag`, `scroll_at`, `screenshot` |
+| `form_input` | Fill form controls and trigger input events |
+| `javascript_tool` | Execute JavaScript in page context and return raw evaluation results |
+| `read_console_messages` | Stream console logs (`log`, `warn`, `error`) and exceptions |
+| `read_network_requests` | Inspect HTTP requests, response headers, and resource loading |
+| `file_upload` | Inject local files into `<input type="file">` elements as Base64 |
+| `browser_batch` | Execute sequential action chains in a single round-trip for speed |
+| `tabs_create_mcp` | Create a new tab inside the current Pi tab group |
+| `tabs_close_mcp` | Close empty or completed tabs |
+
+---
+
+## 🧪 Testing
+
+Verify the local browser automation bridge:
+
 ```bash
 npm test
 ```
-The test verifies `tabs_context_mcp`, `read_page`, `javascript_tool`, and `read_console_messages` in real time.
