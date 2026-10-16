@@ -9,7 +9,7 @@
     "default_title": "Pi"
   },
   "background": {
-    "service_worker": "service-worker-loader.js",
+    "service_worker": "service-worker.js",
     "type": "module"
   },
   "commands": {
@@ -25,7 +25,7 @@
     {
       "all_frames": true,
       "js": [
-        "assets/accessibility-tree.js-B-oUarrX.js"
+        "accessibility-tree.js"
       ],
       "matches": [
         "<all_urls>"
@@ -35,7 +35,7 @@
     {
       "all_frames": false,
       "js": [
-        "assets/agent-visual-indicator.js-BKHK7gXk.js"
+        "agent-visual-indicator.js"
       ],
       "matches": [
         "<all_urls>"
@@ -89,8 +89,8 @@
         "<all_urls>"
       ],
       "resources": [
-        "assets/accessibility-tree.js-B-oUarrX.js",
-        "assets/agent-visual-indicator.js-BKHK7gXk.js"
+        "accessibility-tree.js",
+        "agent-visual-indicator.js"
       ],
       "use_dynamic_url": false
     }

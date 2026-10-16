@@ -19,7 +19,7 @@ async function main() {
 
 	// 1. Query Tab Context
 	console.log("1️⃣  Calling tabs_context_mcp...");
-	const contextResp = await pool.callTool("tabs_context_mcp", { createIfEmpty: false });
+	const contextResp = await pool.callTool("tabs_context_mcp", { createIfEmpty: true });
 	const contextContent = contextResp.result?.content || [];
 	console.log("   Result content count:", contextContent.length);
 	for (const block of contextContent) {

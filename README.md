@@ -130,6 +130,21 @@ pi -p "Open http://localhost:3000 in the browser and return the page title"
 
 ---
 
+## 🏗 Building the Extension
+
+The Chrome extension source is organized under `extension-src/`. To rebuild the extension bundle:
+
+```bash
+npm run build
+```
+
+This bundles self-contained, unhashed files into `chrome-extension/`:
+- `service-worker.js`: Background service worker managing CDP debugger sessions, tool routing, and socket auto-reconnection.
+- `accessibility-tree.js`: DOM accessibility tree walker generating `[ref_X]` identifiers.
+- `agent-visual-indicator.js`: In-page phantom cursor and focus border overlay.
+
+---
+
 ## 🧪 Testing
 
 Verify the local browser automation bridge:
@@ -137,3 +152,4 @@ Verify the local browser automation bridge:
 ```bash
 npm test
 ```
+

@@ -1,1 +1,0 @@
-import{a as e}from"./error-C8zE-wHo.js";function t(t){return new Proxy({},{get(o,r){if("symbol"!=typeof r)throw new e(`\`${t}.${r}\` is not available in this environment; it needs a Node.js-compatible runtime`)}})}var o=t("fs"),r=t("path");export{o as fs,r as path};
