@@ -1,0 +1,36 @@
+{
+  "name": "pi-in-chrome",
+  "version": "1.0.0",
+  "description": "Reverse-engineered from Claude Code's Chrome extension (claude-in-chrome), replicated as an unrestricted browser automation extension for Pi Coding Agent",
+  "author": "ZheNing Hu <adlternative@gmail.com>",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-in-chrome",
+    "claude-in-chrome",
+    "browser-automation",
+    "chrome",
+    "mcp"
+  ],
+  "type": "module",
+  "main": "./src/index.ts",
+  "bin": {
+    "pi-chrome-native-host": "./bin/native-host.mjs",
+    "pi-chrome-setup": "./bin/setup.mjs"
+  },
+  "scripts": {
+    "setup": "node ./bin/setup.mjs",
+    "test": "node ./test/live-test.mjs"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}

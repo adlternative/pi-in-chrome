@@ -1,0 +1,98 @@
+{
+  "action": {
+    "default_icon": {
+      "16": "icon-16.png",
+      "32": "icon-32.png",
+      "48": "icon-48.png",
+      "128": "icon-128.png"
+    },
+    "default_title": "Pi"
+  },
+  "background": {
+    "service_worker": "service-worker-loader.js",
+    "type": "module"
+  },
+  "commands": {
+    "toggle-side-panel": {
+      "description": "Toggle Pi panel",
+      "suggested_key": {
+        "default": "Ctrl+E",
+        "mac": "Command+E"
+      }
+    }
+  },
+  "content_scripts": [
+    {
+      "all_frames": true,
+      "js": [
+        "assets/accessibility-tree.js-B-oUarrX.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "all_frames": false,
+      "js": [
+        "assets/agent-visual-indicator.js-BKHK7gXk.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:;"
+  },
+  "description": "Unrestricted browser automation bridge for Pi Coding Agent without safety blocks or popups",
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "icons": {
+    "16": "icon-16.png",
+    "32": "icon-32.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqKwINyvFO0t9HDmro/TJg60tG4a4oy4JgtbISDwjI1dE8nHQSN9rnSYazSLh6WbNOAsaUzPUuayow52TDEhSN4WwhzgMNZIix0/+GsxwcKvPSdbwfqKFLOx6LYTTi9YUKQUv6cuGv/+RZ7G+bUM+xgi0ieQc466ANN/TeTmuZKpMlQg7xW3v0JpKlLSOQJG9eOIuooZ889AOFkbNa7o34ufbIjOxAQ80ETzgmHzuTcnvPz2v35VYeI3Tszsamv74MwgaYNT2uWk/EXQTimpthjgtRcvORsyDwmRdOe4rCosuJLbK29N8BCQRcqO6Yo0v6qKioFIF/xOja8/fWoDBWQIDAQAB",
+  "manifest_version": 3,
+  "minimum_chrome_version": "116",
+  "name": "Pi",
+  "options_page": "options.html",
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "activeTab",
+    "scripting",
+    "debugger",
+    "tabGroups",
+    "tabs",
+    "alarms",
+    "notifications",
+    "webNavigation",
+    "declarativeNetRequestWithHostAccess",
+    "offscreen",
+    "nativeMessaging",
+    "unlimitedStorage",
+    "downloads",
+    "identity"
+  ],
+  "storage": {
+    "managed_schema": "managed_schema.json"
+  },
+  "version": "1.0.100",
+  "web_accessible_resources": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "resources": [
+        "assets/accessibility-tree.js-B-oUarrX.js",
+        "assets/agent-visual-indicator.js-BKHK7gXk.js"
+      ],
+      "use_dynamic_url": false
+    }
+  ]
+}
