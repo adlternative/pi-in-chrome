@@ -20391,7 +20391,7 @@ async function gi3() {
         if (!await chrome.permissions.contains({ permissions: ["nativeMessaging"] })) return "absent";
         if ("function" != typeof chrome.runtime.connectNative) return "absent";
         ai3();
-        const t5 = [{ name: "com.pi.chrome_browser_extension", label: "Pi" }, { name: "com.anthropic.pi_code_browser_extension", label: "Pi Code" }];
+        const t5 = [{ name: "com.pi.chrome_browser_extension", label: "Pi in Chrome" }, { name: "com.anthropic.pi_code_browser_extension", label: "Pi Code" }];
         let n3 = true;
         for (const r4 of t5) try {
           const e19 = chrome.runtime.connectNative(r4.name), t6 = await new Promise((t7) => {

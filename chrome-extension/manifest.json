@@ -6,7 +6,7 @@
       "48": "icon-48.png",
       "128": "icon-128.png"
     },
-    "default_title": "Pi"
+    "default_title": "Pi in Chrome"
   },
   "background": {
     "service_worker": "service-worker.js",
@@ -14,7 +14,7 @@
   },
   "commands": {
     "toggle-side-panel": {
-      "description": "Toggle Pi panel",
+      "description": "Toggle Pi in Chrome panel",
       "suggested_key": {
         "default": "Ctrl+E",
         "mac": "Command+E"
@@ -59,7 +59,7 @@
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqKwINyvFO0t9HDmro/TJg60tG4a4oy4JgtbISDwjI1dE8nHQSN9rnSYazSLh6WbNOAsaUzPUuayow52TDEhSN4WwhzgMNZIix0/+GsxwcKvPSdbwfqKFLOx6LYTTi9YUKQUv6cuGv/+RZ7G+bUM+xgi0ieQc466ANN/TeTmuZKpMlQg7xW3v0JpKlLSOQJG9eOIuooZ889AOFkbNa7o34ufbIjOxAQ80ETzgmHzuTcnvPz2v35VYeI3Tszsamv74MwgaYNT2uWk/EXQTimpthjgtRcvORsyDwmRdOe4rCosuJLbK29N8BCQRcqO6Yo0v6qKioFIF/xOja8/fWoDBWQIDAQAB",
   "manifest_version": 3,
   "minimum_chrome_version": "116",
-  "name": "Pi",
+  "name": "Pi in Chrome",
   "options_page": "options.html",
   "permissions": [
     "sidePanel",

@@ -77,7 +77,7 @@ This registers the native messaging host manifest across all installed Chromium 
 2. Toggle on **"Developer mode"** in the top-right corner.
 3. Click **"Load unpacked"** in the top-left corner.
 4. Select the `chrome-extension/` directory from this repository.
-5. The extension (`Pi`) will appear with ID `jlgmmfgplddjhfbfhnohfnjhdbpnalka` and the multi-color Pi logo.
+5. The extension (`Pi in Chrome`) will appear with ID `jlgmmfgplddjhfbfhnohfnjhdbpnalka` and the multi-color Pi logo.
 
 ---
 
