@@ -14,6 +14,26 @@
   ],
   "type": "module",
   "main": "./src/index.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adlternative/pi-in-chrome.git"
+  },
+  "homepage": "https://github.com/adlternative/pi-in-chrome#readme",
+  "bugs": {
+    "url": "https://github.com/adlternative/pi-in-chrome/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "bin",
+    "src",
+    "chrome-extension",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
   "bin": {
     "pi-chrome-native-host": "./bin/native-host.mjs",
     "pi-chrome-setup": "./bin/setup.mjs"
