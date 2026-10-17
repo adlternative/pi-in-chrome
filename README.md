@@ -40,13 +40,7 @@ During deep protocol analysis, REA uncovered:
 
 ### Option 1: Install via Pi Package Manager (Recommended)
 
-Install directly from npm into your user settings (`~/.pi/agent/settings.json`):
-
-```bash
-pi install npm:pi-in-chrome
-```
-
-Or install directly from GitHub:
+Install directly from GitHub into your user settings (`~/.pi/agent/settings.json`):
 
 ```bash
 pi install git:github.com/adlternative/pi-in-chrome
