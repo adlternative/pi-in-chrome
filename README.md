@@ -1,6 +1,24 @@
 # Pi in Chrome (`pi-in-chrome`)
 
-> Native browser automation extension for [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent), offering an unrestricted, local-first alternative to Claude Code's built-in Chrome integration (`claude-in-chrome`).
+> Native browser automation extension for [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent), reverse-engineered using **REA (`rea-agents`)** from Claude Code's built-in Chrome extension (`claude-in-chrome`), and reconstructed into an unrestricted, standalone local package.
+
+<p align="center">
+  <img src="./docs/showcase.png" alt="Pi in Chrome Showcase" width="100%" />
+</p>
+
+---
+
+## 🔍 Reverse-Engineered with REA
+
+This project was reverse-engineered from Claude Code's Chrome extension (`fcoeoabgfenejglbffodgkkbkcdhcgfn`) using **REA (`rea-agents`)** — an autonomous multi-agent reverse engineering framework.
+
+During deep protocol analysis, REA uncovered:
+- **E2EE Pairing Tunnel**: How Claude Code and Chromium establish local pairing over Unix domain sockets using AES-GCM encrypted frame exchanges.
+- **Chrome DevTools Protocol (CDP) Driver**: How physical clicks, keystrokes, scrolling, and viewport screenshots are executed through `chrome.debugger`.
+- **DOM Accessibility Indexing**: How pages are mapped into structured screen-reader trees with stable `[ref_X]` identifiers.
+- **Artificial Safety Bottlenecks**: Cloud URL hash queries (`url_hash_check`), 30-second popup modals, and regex censors (`[BLOCKED]`) that prevent automation on `localhost` and offline apps.
+
+`pi-in-chrome` replicates the full CDP automation engine and E2EE socket protocol while eliminating all cloud telemetry, OAuth dependencies, and safety blocks — providing Pi with direct, unrestricted browser control.
 
 ---
 
