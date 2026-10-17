@@ -46,7 +46,7 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:;"
   },
-  "description": "Unrestricted browser automation bridge for Pi Coding Agent without safety blocks or popups",
+  "description": "Browser automation bridge for Pi Coding Agent",
   "host_permissions": [
     "<all_urls>"
   ],
