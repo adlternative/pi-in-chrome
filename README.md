@@ -30,7 +30,7 @@ During deep protocol analysis, REA uncovered:
 | **Permission Confirmation** | Pops up a 600×600 modal window; aborts automation with timeout error if unclicked within 30 seconds | **Zero Popups**: Automated actions proceed immediately without interactive modal interruptions |
 | **JavaScript Content Censorship** | Redacts URL parameters, query strings, and keys matching `/author\|auth\|token\|session/i` with `[BLOCKED]` | **100% Raw Data**: Unaltered evaluation results returned directly to the agent |
 | **Tab Isolation & Safety** | Fixed to Anthropic's yellow tab group | **Dedicated `Pi` Tab Sandbox**: Confines agent actions to its own tab group to protect your personal browsing tabs |
-| **Semantic Element Search** | Extension internally calls cloud Anthropic API (`claude-3-5-haiku`) | **Driven by Pi's Active Model**: Uses Pi's own configured local or remote model, keeping all webpage data private |
+| **Semantic Element Search** | Extension internally calls cloud Anthropic API (`claude-3-5-haiku`) | **Driven by Pi's Active Model**: `find` sends its sample to Pi over the bridge and Pi answers with the session model — no Anthropic client, login, or API key |
 | **Account & Login Requirement** | Mandates `claude.ai` account login and OAuth consent | **100% Standalone**: Works offline with zero third-party account or API key dependencies |
 | **Native Host Reconnection** | Single attempt on launch; dies permanently on disconnect | **Self-Healing**: Automatic 3-second heartbeat and background reconnect loop via `chrome.alarms` |
 
@@ -135,7 +135,7 @@ pi -p "Open http://localhost:3000 in the browser and return the page title"
 | `navigate` | Navigate to URLs, or go back/forward in browsing history |
 | `read_page` | Extract full DOM semantic accessibility tree with `[ref_X]` identifiers |
 | `get_page_text` | Extract reader-mode plain text from the active page |
-| `find` | Locate page elements using natural language query scoring |
+| `find` | Locate page elements by natural-language query — sampled by Pi's active model through the bridge (`read_page` + refs is the no-model fallback) |
 | `computer` | Physical CDP input: `click`, `type`, `mouse_down`, `mouse_up`, `drag`, `scroll_at`, `screenshot` |
 | `form_input` | Fill form controls and trigger input events |
 | `javascript_tool` | Execute JavaScript in page context and return raw evaluation results |

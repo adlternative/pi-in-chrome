@@ -623,6 +623,15 @@ export class ChromeNativeHostServer {
 				entry.buffer = entry.buffer.subarray(4 + len);
 				try {
 					const req = JSON.parse(payload.toString("utf-8"));
+					if (req && req.type === "inference_response") {
+						// Answer to a model sample the extension delegated to Pi.
+						writeToChromeStdout({
+							type: "inference_response",
+							request_id: req.request_id,
+							result: req.result,
+						});
+						continue;
+					}
 					writeToChromeStdout({
 						type: "tool_request",
 						method: req.method,

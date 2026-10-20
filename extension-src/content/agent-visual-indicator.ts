@@ -214,25 +214,30 @@
         (u = !1),
         (L = !1),
         (function () {
-          try {
-            if (!d) {
+          const startKeepAlive = () => {
+            try {
+              if (d) {
+                d.resume().catch(() => {});
+                return;
+              }
               d = new AudioContext();
               const e = d.createGain();
               ((e.gain.value = 0), e.connect(d.destination));
               const t = d.createConstantSource();
-              (t.connect(e),
-                t.start(),
-                d.addEventListener("statechange", () => {}),
-                document.addEventListener(
-                  "pointerdown",
-                  () => {
-                    c && d?.resume().catch(() => {});
-                  },
-                  { capture: !0 },
-                ));
-            }
+              (t.connect(e), t.start(), d.resume().catch(() => {}));
+            } catch (e) {}
+          };
+          // Chrome's autoplay policy only allows audio after a real user gesture
+          // in the page. Creating the silent keep-alive eagerly made every
+          // automated tab log "The AudioContext was not allowed to start", so it
+          // now waits for the first pointerdown (a human on the page).
+          if (d)
             d.resume().catch(() => {});
-          } catch (e) {}
+          else
+            document.addEventListener("pointerdown", startKeepAlive, {
+              capture: !0,
+              once: !0,
+            });
         })(),
         document.hidden || y || A());
     }

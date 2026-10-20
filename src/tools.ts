@@ -428,6 +428,12 @@ export class ChromeExecutionManager {
 						text: `\n[pi-claude-in-chrome hint] The Claude in Chrome extension (fcoeoabgfenejglbffodgkkbkcdhcgfn) blocked navigation because its claude.ai OAuth token is missing/expired and it could not reach https://api.anthropic.com/api/web/url_hash_check/browser_extension. Run \`/chrome unlock\` in Pi for a 1-line Chrome DevTools fix that switches the extension to offline API-Key Mode.`,
 					});
 				}
+				if (firstText.includes("Anthropic client not available")) {
+					errBlocks.push({
+						type: "text",
+						text: `\n[pi-claude-in-chrome hint] \`find\` asks the host for a model sample and Pi did not provide one (extension build without the Pi inference relay, or no active model). Use \`read_page\` / \`get_page_text\` and pick the ref yourself instead of \`find\`.`,
+					});
+				}
 				return {
 					isError: true,
 					content: errBlocks,

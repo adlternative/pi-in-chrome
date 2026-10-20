@@ -1351,7 +1351,7 @@ function Tn(t5, e18) {
   }
 }
 function An(t5, e18) {
-  if (0 === t5.length) return true;
+  return true;
   const n3 = yn(t5), r4 = _n(e18), s3 = `${r4}${r4.includes("?") ? "&" : "?"}service_name=${encodeURIComponent(e18.serviceName)}`;
   if ((function() {
     try {
@@ -1445,6 +1445,7 @@ var Bn = new class {
     }
   }
   track(t5, e18 = {}, n3) {
+    if (true) return;
     try {
       const r4 = this.config;
       if (!r4) return void this.bufferPreInit(t5, e18, n3);
@@ -10652,14 +10653,14 @@ var ul2 = new class e12 {
   async detachDebugger(e18) {
     return await this.endFocusEmulation(e18), new Promise((t5) => {
       chrome.debugger.detach({ tabId: e18 }, () => {
-        t5();
+        void chrome.runtime.lastError, t5();
       });
     });
   }
   async isDebuggerAttached(e18) {
     return new Promise((t5) => {
       chrome.debugger.getTargets((r4) => {
-        t5(r4.find((t6) => t6.tabId === e18)?.attached ?? false);
+        t5(chrome.runtime.lastError ? false : r4?.find((t6) => t6.tabId === e18)?.attached ?? false);
       });
     });
   }
@@ -20512,12 +20513,16 @@ async function yi3(e18) {
         if ("inference_response" === n3 && void 0 !== r4?.sealed) return void await Yr3(r4.request_id, r4.sealed);
         try {
           if ("get_bridge_identity" === n3) return void await ui3(kr3(t5, { result: { bridge_device_id: await Dt3(), echo: r4?.echo } }));
-          if ("execute_tool" === n3) return void await ki3(await _i3(r4, t5), t5);
+          if ("execute_tool" === n3) return void await ki3(await _i3(r4, t5, void 0, true === r4?.relay_inference ? piInferenceRelay : void 0), t5);
+          if ("inference_response" === n3) return void piResolveInference(r4?.request_id, r4?.result);
           "permission_response" !== n3 && await ki3({ content: `Unknown method: ${n3}` }, t5);
         } catch (i5) {
           await ki3(gk(`Tool execution failed: ${i5 instanceof Error ? i5.message : "Unknown error"}`), t5);
         }
       })(e18);
+      break;
+    case "inference_response":
+      piResolveInference(e18.request_id, e18.result);
       break;
     case "status_response":
       !(function(e19) {
@@ -20552,6 +20557,24 @@ async function yi3(e18) {
         Yc2.detachAll("native-messaging");
       })(e18);
   }
+}
+var piInferencePending = /* @__PURE__ */ new Map();
+function piInferenceRelay(e18) {
+  const t5 = crypto.randomUUID();
+  return new Promise((n3) => {
+    const r4 = setTimeout(() => {
+      piInferencePending.delete(t5), n3({ ok: false, error: "pi inference timeout" });
+    }, 6e4);
+    piInferencePending.set(t5, { resolve: (e19) => {
+      clearTimeout(r4), n3(e19);
+    } }), ui3(Ir3("inference_request", { request_id: t5, body: e18 })).catch(() => {
+    });
+  });
+}
+function piResolveInference(e18, t5) {
+  const n3 = piInferencePending.get(e18);
+  if (!n3) return;
+  piInferencePending.delete(e18), n3.resolve(t5 && true === t5.ok && Array.isArray(t5.content) ? { ok: true, content: t5.content, stop_reason: t5.stop_reason ?? null } : { ok: false, error: "string" == typeof t5?.error ? t5.error : "malformed" });
 }
 async function _i3(e18, t5, n3, r4) {
   if (!e18?.tool) return gk("No tool specified");

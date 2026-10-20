@@ -68,6 +68,26 @@ export interface NotificationMessage {
 	params?: Record<string, unknown>;
 }
 
+/**
+ * Inference request the extension sends when a tool needs a model sample
+ * (`find` is the only one today). Body shape mirrors the extension's
+ * desktop/relay inference contract.
+ */
+export interface InferenceRelayBody {
+	model_class?: "default" | "small_fast";
+	max_tokens?: number;
+	system?: string | unknown[];
+	messages?: Array<{ role: string; content: unknown }>;
+}
+
+/** Reply shape the extension accepts from any inference relay provider. */
+export interface InferenceRelayResult {
+	ok: boolean;
+	content?: Array<{ type: string; text?: string }>;
+	stop_reason?: string | null;
+	error?: string;
+}
+
 export class SocketConnectionError extends Error {
 	constructor(message: string) {
 		super(message);
@@ -280,7 +300,7 @@ export class SocketClient {
 	public async callTool(
 		toolName: string,
 		args: Record<string, unknown>,
-		options?: { sessionScope?: string; timeoutMs?: number },
+		options?: { sessionScope?: string; timeoutMs?: number; relayInference?: boolean },
 	): Promise<ExtensionToolResponse> {
 		const attemptCall = async (): Promise<ExtensionToolResponse> => {
 			const ok = await this.ensureConnected();
@@ -302,10 +322,40 @@ export class SocketClient {
 		}
 	}
 
+	/** Write one length-prefixed JSON frame to the bridge socket. */
+	private writeFrame(payload: unknown): boolean {
+		if (!this.socket || !this.connected) return false;
+		const payloadBuf = Buffer.from(JSON.stringify(payload), "utf-8");
+		if (payloadBuf.length > MAX_MESSAGE_SIZE) {
+			this.logger.error(`Refusing to send oversized frame (${payloadBuf.length} bytes)`);
+			return false;
+		}
+		const headerBuf = Buffer.allocUnsafe(4);
+		headerBuf.writeUInt32LE(payloadBuf.length, 0);
+		this.socket.write(Buffer.concat([headerBuf, payloadBuf]));
+		return true;
+	}
+
+	/**
+	 * Answer an `inference_request` notification. The extension resolves its
+	 * pending model call with this payload instead of calling Anthropic.
+	 *
+	 * The frame is deliberately method-shaped rather than a new top-level `type`:
+	 * the installed Chrome native host forwards socket frames to the extension
+	 * only as `{type:"tool_request", method, params}`, and that host binary
+	 * cannot be modified.
+	 */
+	public sendInferenceResponse(requestId: string, result: InferenceRelayResult): boolean {
+		return this.writeFrame({
+			method: "inference_response",
+			params: { request_id: requestId, result },
+		});
+	}
+
 	private sendToolRequest(
 		toolName: string,
 		args: Record<string, unknown>,
-		options?: { sessionScope?: string; timeoutMs?: number },
+		options?: { sessionScope?: string; timeoutMs?: number; relayInference?: boolean },
 	): Promise<ExtensionToolResponse> {
 		return new Promise<ExtensionToolResponse>((resolve, reject) => {
 			if (!this.socket || !this.connected) {
@@ -334,6 +384,9 @@ export class SocketClient {
 					tool: toolName,
 					args,
 					...(sessionScope ? { session_scope: sessionScope } : {}),
+					// Advertise that this host can answer `inference_request`
+					// notifications, so the extension routes model samples here.
+					...(options?.relayInference ? { relay_inference: true } : {}),
 				},
 			});
 
@@ -510,6 +563,12 @@ export class SocketPool extends EventEmitter {
 	private readonly logger: Logger;
 	private notificationHandler: ((notification: NotificationMessage) => void) | null = null;
 	public readonly sessionScope: string;
+	/**
+	 * When true, tool calls advertise `relay_inference` so the extension sends its
+	 * model samples (currently only the `find` tool) back to Pi instead of
+	 * Anthropic. Set by the Pi extension once a model is available.
+	 */
+	public relayInference = false;
 
 	constructor(logger: Logger = noopLogger) {
 		super();
@@ -564,6 +623,7 @@ export class SocketPool extends EventEmitter {
 					return targetClient.callTool(toolName, args, {
 						sessionScope: this.sessionScope,
 						timeoutMs: options?.timeoutMs,
+						relayInference: this.relayInference,
 					});
 				}
 			}
@@ -576,6 +636,7 @@ export class SocketPool extends EventEmitter {
 				return client.callTool(toolName, args, {
 					sessionScope: this.sessionScope,
 					timeoutMs: options?.timeoutMs,
+					relayInference: this.relayInference,
 				});
 			}
 		}
@@ -589,6 +650,15 @@ export class SocketPool extends EventEmitter {
 		}
 		this.clients.clear();
 		this.tabRoutes.clear();
+	}
+
+	/** Broadcast an inference answer to every connected bridge socket. */
+	public sendInferenceResponse(requestId: string, result: InferenceRelayResult): void {
+		for (const client of this.clients.values()) {
+			if (client.isConnected()) {
+				client.sendInferenceResponse(requestId, result);
+			}
+		}
 	}
 
 	private refreshClients(): void {

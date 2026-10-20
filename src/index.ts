@@ -6,6 +6,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Message } from "@earendil-works/pi-ai";
 import {
 	detectChromeExtensionStatus,
 	getChromeExtensionPath,
@@ -22,6 +23,8 @@ import {
 	PI_CHROME_EXTENSION_ID,
 	PI_NATIVE_HOST_NAME,
 	SocketPool,
+	type InferenceRelayBody,
+	type NotificationMessage,
 } from "./protocol.ts";
 import {
 	CHROME_TOOL_PREFIX,
@@ -48,6 +51,67 @@ export default function claudeInChromeExtension(pi: ExtensionAPI): void {
 	const allChromeToolNames = tools.map((t) => t.name);
 
 	let chromeEnabled = true;
+	// Latest context with a resolved model; used to answer the extension's
+	// `inference_request` notifications with Pi's own model.
+	let activeContext: ExtensionContext | null = null;
+
+	/** Flatten the relay body's message blocks into Pi transcript messages. */
+	function toPiMessages(body: InferenceRelayBody): Message[] {
+		const messages: Message[] = [];
+		for (const entry of body.messages ?? []) {
+			const blocks = Array.isArray(entry?.content) ? entry.content : [entry?.content];
+			const text = blocks
+				.map((block) => {
+					if (typeof block === "string") return block;
+					const candidate = block as { text?: unknown } | null;
+					return typeof candidate?.text === "string" ? candidate.text : "";
+				})
+				.filter(Boolean)
+				.join("\n");
+			if (!text) continue;
+			// The extension only sends user-role prompts today (find's a11y tree).
+			messages.push({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() });
+		}
+		return messages;
+	}
+
+	/** Answer one model sample the extension delegated to Pi (`find` uses this). */
+	async function answerInferenceRequest(
+		notification: NotificationMessage,
+		ctx: ExtensionContext | null,
+	): Promise<void> {
+		const requestId = notification.params?.request_id;
+		if (typeof requestId !== "string") return;
+		const body = (notification.params?.body ?? {}) as InferenceRelayBody;
+		const model = ctx?.model;
+		if (!ctx || !model) {
+			pool.sendInferenceResponse(requestId, { ok: false, error: "pi has no active model" });
+			return;
+		}
+		try {
+			const message = await ctx.modelRegistry.complete(
+				model,
+				{
+					systemPrompt: typeof body.system === "string" ? body.system : undefined,
+					messages: toPiMessages(body),
+				},
+				body.max_tokens ? { maxTokens: body.max_tokens } : undefined,
+			);
+			const content = message.content
+				.filter((block) => block.type === "text")
+				.map((block) => ({ type: "text", text: (block as { text: string }).text }));
+			pool.sendInferenceResponse(requestId, {
+				ok: true,
+				content,
+				stop_reason: message.stopReason ?? null,
+			});
+		} catch (err) {
+			pool.sendInferenceResponse(requestId, {
+				ok: false,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
 
 	// Register CLI flags (`--chrome` / `--no-chrome`, matching Claude Code)
 	pi.registerFlag("chrome", {
@@ -100,8 +164,19 @@ export default function claudeInChromeExtension(pi: ExtensionAPI): void {
 
 	// Listen for notifications from Chrome Extension
 	pool.setNotificationHandler((notification) => {
+		if (notification.method === "inference_request") {
+			void answerInferenceRequest(notification, activeContext);
+			return;
+		}
 		pi.events.emit("chrome:notification", notification);
 	});
+
+	function markInferenceCapable(ctx: ExtensionContext | null): void {
+		activeContext = ctx;
+		// Advertise `relay_inference` so the extension sends model samples to Pi
+		// instead of requiring a claude.ai login / Anthropic API key.
+		pool.relayInference = Boolean(ctx?.model);
+	}
 
 	// Session startup: check CLI flags, auto-install native host if missing, and connect socket pool
 	pi.on("session_start", async (_event, ctx) => {
@@ -119,13 +194,15 @@ export default function claudeInChromeExtension(pi: ExtensionAPI): void {
 			// Non-fatal
 		}
 
+		markInferenceCapable(ctx);
 		await updateFooterStatus(ctx);
 	});
 
 	// Inject Claude in Chrome system prompt guidelines when Chrome tools are active
 	// Replicates `VKe` in `chunk-darxmw8c.js`
-	pi.on("before_agent_start", async (event, _ctx) => {
+	pi.on("before_agent_start", async (event, ctx) => {
 		if (!chromeEnabled) return;
+		markInferenceCapable(ctx);
 		const activeTools = pi.getActiveTools();
 		const hasChromeToolActive = activeTools.some((t) => t.startsWith(CHROME_TOOL_PREFIX));
 		if (!hasChromeToolActive) return;
@@ -143,6 +220,7 @@ export default function claudeInChromeExtension(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", async () => {
 		await manager.closeEmptyTabGroups();
 		pool.disconnect();
+		activeContext = null;
 	});
 
 	// Register `/chrome` command (replicating `/chrome` in `chunk-hp175n4t.js`)
