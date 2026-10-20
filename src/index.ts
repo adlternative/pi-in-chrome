@@ -307,9 +307,10 @@ export default function claudeInChromeExtension(pi: ExtensionAPI): void {
 					`- **Standalone Extension Path**: \`${extPath}\``,
 					`- **Extension Installed**: ${extStatus.installed ? `Yes (${extStatus.browsers.map((b) => `${b.browser} [${b.profile}] v${b.version}`).join(", ")})` : `No (Load unpacked from \`${extPath}\`)`}`,
 					`- **Native Host Manifests**: ${extStatus.nativeHostManifests.length > 0 ? extStatus.nativeHostManifests.map((m) => `${m.browser} -> \`${m.wrapperPath}\``).join(", ") : "None (run `/chrome setup`)"}`,
-					`- **Socket Pool Directories**: \`${socketDir}\`, \`${claudeSocketDir}\``,
+					`- **Socket Pool Directories**: \`${socketDir}\`, \`${claudeSocketDir}\` (Claude dir only for Pi mirrors unless \`PI_CHROME_ALLOW_CLAUDE_BRIDGE=1\`)`,
 					`- **Discovered Sockets**: ${availableSockets.length > 0 ? availableSockets.map((s) => `\`${s}\``).join(", ") : "None"}`,
 					`- **Connected Sockets**: ${connectedSockets.length > 0 ? connectedSockets.map((s) => `\`${s}\``).join(", ") : "None"}`,
+					`- **Serving Extension**: ${connectedSockets.some((s) => s.startsWith(claudeSocketDir)) && process.env.PI_CHROME_ALLOW_CLAUDE_BRIDGE === "1" ? "Claude extension (opted in) / Pi in Chrome" : "Pi in Chrome"}`,
 					`- **Routed Tabs**: ${routes.size}`,
 					`- **Setup Command**: run \`/chrome setup\` to auto-install Native Host manifests`,
 				];

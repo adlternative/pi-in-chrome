@@ -127,50 +127,83 @@ export function getSocketDirPath(type: "pi" | "claude" = "pi"): string {
  * Enumerate all active `.sock` files in the socket pool directories (Pi sockets first, then Claude sockets).
  * Replicates `r2t()` in `chunk-rf49jb1h.js`.
  */
+/**
+ * Enumerate active bridge sockets.
+ *
+ * Pi's own sockets are always included. Sockets in the Claude directory are only
+ * included when they are Pi's own mirrors (`pi-<pid>.sock`) or when
+ * `PI_CHROME_ALLOW_CLAUDE_BRIDGE=1` is set: a bare `<pid>.sock` there belongs to
+ * Claude Code's native host and is served by Claude's own extension, which
+ * enforces claude.ai login, URL hash checks and permission prompts. Driving that
+ * extension from Pi produced confusing failures (`Permission denied by user`,
+ * "tab is not in Pi's tab group").
+ *
+ * Paths are de-duplicated by real path so a mirror symlink never yields a second
+ * connection to the same host.
+ */
 export function getAvailableSocketPaths(): string[] {
 	if (process.platform === "win32") {
 		return [getSocketDirPath("pi"), getSocketDirPath("claude")];
 	}
-	const paths: string[] = [];
-	const searchDirs = [getSocketDirPath("pi"), getSocketDirPath("claude")];
 
-	for (const dir of searchDirs) {
+	const allowClaudeBridge = process.env.PI_CHROME_ALLOW_CLAUDE_BRIDGE === "1";
+	const paths: string[] = [];
+	const seenRealPaths = new Set<string>();
+
+	const addPath = (fullPath: string): void => {
+		let realPath: string;
 		try {
-			const files = fs.readdirSync(dir);
-			for (const file of files) {
-				if (file.endsWith(".sock")) {
-					// Check if the PID is still alive if filename is `<pid>.sock`
-					const pidMatch = /^(\d+)\.sock$/.exec(file);
-					if (pidMatch) {
-						const pid = Number.parseInt(pidMatch[1], 10);
-						try {
-							process.kill(pid, 0);
-						} catch (err: any) {
-							if (err?.code === "ESRCH") {
-								continue;
-							}
-						}
-					}
-					const fullPath = path.join(dir, file);
-					if (!paths.includes(fullPath)) {
-						paths.push(fullPath);
-					}
-				}
-			}
+			realPath = fs.realpathSync(fullPath);
+		} catch {
+			// Dead symlink or unreadable entry
+			return;
+		}
+		if (seenRealPaths.has(realPath)) return;
+		seenRealPaths.add(realPath);
+		paths.push(fullPath);
+	};
+
+	const isPidAlive = (pid: number): boolean => {
+		try {
+			process.kill(pid, 0);
+			return true;
+		} catch (err: any) {
+			return err?.code !== "ESRCH";
+		}
+	};
+
+	const collect = (dir: string, include: (file: string) => boolean): void => {
+		let files: string[];
+		try {
+			files = fs.readdirSync(dir);
 		} catch {
 			// Directory doesn't exist yet
+			return;
 		}
-	}
+		for (const file of files) {
+			if (!file.endsWith(".sock") || !include(file)) continue;
+			// `<pid>.sock` and Pi mirrors (`pi-<pid>.sock`): skip dead hosts.
+			const pidMatch = /^(?:pi-)?(\d+)\.sock$/.exec(file);
+			if (pidMatch && !isPidAlive(Number.parseInt(pidMatch[1], 10))) continue;
+			addPath(path.join(dir, file));
+		}
+	};
+
+	// 1. Pi's own sockets: everything the Pi native host publishes.
+	collect(getSocketDirPath("pi"), () => true);
+
+	// 2. Claude directory: only Pi's own mirrors, unless explicitly opted in.
+	collect(getSocketDirPath("claude"), (file) => allowClaudeBridge || file.startsWith("pi-"));
 
 	// Fallback to legacy TMPDIR socket if present
 	const username = getSocketUsername();
 	for (const prefix of ["pi-mcp-browser-bridge-", "claude-mcp-browser-bridge-"]) {
 		const legacyPath = path.join(os.tmpdir(), `${prefix}${username}`);
 		try {
-			if (fs.existsSync(legacyPath) && !paths.includes(legacyPath)) {
+			if (fs.existsSync(legacyPath)) {
 				const stat = fs.statSync(legacyPath);
 				if (stat.isSocket()) {
-					paths.push(legacyPath);
+					addPath(legacyPath);
 				}
 			}
 		} catch {
