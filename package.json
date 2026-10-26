@@ -42,7 +42,8 @@
     "build": "node ./scripts/build-extension.mjs",
     "build:extension": "node ./scripts/build-extension.mjs",
     "setup": "node ./bin/setup.mjs",
-    "test": "node ./test/live-test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "test:live": "node ./test/live-test.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.28.2",
