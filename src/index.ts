@@ -79,6 +79,7 @@ export default function claudeInChromeExtension(pi: ExtensionAPI): void {
 	async function answerInferenceRequest(
 		notification: NotificationMessage,
 		ctx: ExtensionContext | null,
+		signal?: AbortSignal,
 	): Promise<void> {
 		const requestId = notification.params?.request_id;
 		if (typeof requestId !== "string") return;
@@ -95,7 +96,12 @@ export default function claudeInChromeExtension(pi: ExtensionAPI): void {
 					systemPrompt: typeof body.system === "string" ? body.system : undefined,
 					messages: toPiMessages(body),
 				},
-				body.max_tokens ? { maxTokens: body.max_tokens } : undefined,
+				{
+					...(body.max_tokens ? { maxTokens: body.max_tokens } : {}),
+					// The `find` call that triggered this sample is still in flight; ESC must
+					// cancel this nested model request too, otherwise the tool keeps hanging.
+					...(signal ? { signal } : {}),
+				},
 			);
 			const content = message.content
 				.filter((block) => block.type === "text")
@@ -165,7 +171,7 @@ export default function claudeInChromeExtension(pi: ExtensionAPI): void {
 	// Listen for notifications from Chrome Extension
 	pool.setNotificationHandler((notification) => {
 		if (notification.method === "inference_request") {
-			void answerInferenceRequest(notification, activeContext);
+			void answerInferenceRequest(notification, activeContext, manager.activeAbortSignal);
 			return;
 		}
 		pi.events.emit("chrome:notification", notification);
@@ -214,11 +220,11 @@ export default function claudeInChromeExtension(pi: ExtensionAPI): void {
 
 	// Session switch / shutdown: close empty MCP tab groups (`chunk-7m0pkhzw.js`) and disconnect sockets
 	pi.on("session_before_switch", async () => {
-		await manager.closeEmptyTabGroups();
+		await manager.closeEmptyTabGroups(2000);
 	});
 
 	pi.on("session_shutdown", async () => {
-		await manager.closeEmptyTabGroups();
+		await manager.closeEmptyTabGroups(2000);
 		pool.disconnect();
 		activeContext = null;
 	});

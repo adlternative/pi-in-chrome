@@ -165,9 +165,27 @@ This bundles self-contained, unhashed files into `chrome-extension/`:
 
 ## 🧪 Testing
 
-Verify the local browser automation bridge:
+### Protocol tests (offline, no Chrome needed)
 
 ```bash
 npm test
+```
+
+`test/protocol.test.mjs` starts a fake bridge socket that speaks the same
+length-prefixed JSON frames as the native host, and asserts the request/response
+correlation and cancellation behaviour of `src/protocol.ts`:
+
+- every call carries a `tool_use_id` and gets its own response, including
+  concurrent calls that answer out of order;
+- `Esc` cancels a tool call immediately instead of waiting for the 60s timeout,
+  and the late response of a cancelled call is discarded rather than handed to
+  the next tool;
+- extensions that do not echo `tool_use_id` still work (FIFO fallback), and a
+  timed-out call's response is dropped the same way.
+
+### Live bridge test (needs Chrome running with the extension)
+
+```bash
+npm run test:live
 ```
 

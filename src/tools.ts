@@ -28,6 +28,7 @@ import {
 	type ExtensionToolResponse,
 	MAX_FILE_UPLOAD_BYTES,
 	type SocketPool,
+	ToolAbortedError,
 	type ToolResultBlock,
 } from "./protocol.ts";
 
@@ -259,9 +260,22 @@ function parseFirstTabFromTabsContext(
 	return null;
 }
 
+export interface BrowserToolExecutionOptions {
+	/** Abort signal from Pi. When it fires, Pi stops waiting for the browser. */
+	signal?: AbortSignal;
+	/** Pi's tool-call id, relayed as `tool_use_id` so the response can be correlated. */
+	toolCallId?: string;
+}
+
 export class ChromeExecutionManager {
 	public readonly pool: SocketPool;
 	private readonly trackedTabIds = new Set<number>();
+	/**
+	 * Abort signal of the browser tool currently being awaited. `find` samples the
+	 * page with Pi's own model via an `inference_request` notification while the
+	 * tool is in flight, so this is the signal that nested model call must honour.
+	 */
+	public activeAbortSignal: AbortSignal | undefined;
 
 	constructor(pool: SocketPool) {
 		this.pool = pool;
@@ -282,10 +296,34 @@ export class ChromeExecutionManager {
 		rawToolName: string,
 		rawArgs: Record<string, unknown>,
 		ctx: ExtensionToolContext,
+		options: BrowserToolExecutionOptions = {},
 	): Promise<{ content: (TextContent | ImageContent)[]; isError?: boolean; details?: Record<string, unknown> }> {
 		const toolName = rawToolName.startsWith(CHROME_TOOL_PREFIX)
 			? rawToolName.slice(CHROME_TOOL_PREFIX.length)
 			: rawToolName;
+
+		const callerSignal = options.signal;
+		if (callerSignal?.aborted) {
+			return abortedToolResult(toolName);
+		}
+
+		this.activeAbortSignal = callerSignal;
+		try {
+			return await this.runBrowserTool(toolName, rawArgs, ctx, options);
+		} finally {
+			if (this.activeAbortSignal === callerSignal) {
+				this.activeAbortSignal = undefined;
+			}
+		}
+	}
+
+	private async runBrowserTool(
+		toolName: string,
+		rawArgs: Record<string, unknown>,
+		ctx: ExtensionToolContext,
+		options: BrowserToolExecutionOptions,
+	): Promise<{ content: (TextContent | ImageContent)[]; isError?: boolean; details?: Record<string, unknown> }> {
+		const signal = options.signal;
 
 		let args: Record<string, unknown> = { ...rawArgs };
 
@@ -385,7 +423,11 @@ export class ChromeExecutionManager {
 				const tabsResp = await this.pool.callTool(
 					"tabs_context_mcp",
 					{ createIfEmpty: true },
-					{ timeoutMs: 8000 },
+					{
+						timeoutMs: 8000,
+						signal,
+						requestId: options.toolCallId ? `${options.toolCallId}:tabs` : undefined,
+					},
 				);
 				if (!tabsResp.error) {
 					frontLoadedTabInfo = parseFirstTabFromTabsContext(tabsResp);
@@ -400,7 +442,10 @@ export class ChromeExecutionManager {
 		}
 
 		try {
-			const response = await this.pool.callTool(toolName, args);
+			const response = await this.pool.callTool(toolName, args, {
+				signal,
+				requestId: options.toolCallId,
+			});
 			if (!response) {
 				return {
 					isError: true,
@@ -470,6 +515,10 @@ export class ChromeExecutionManager {
 				},
 			};
 		} catch (err: any) {
+			// An abort/timeout is not a browser failure: Pi already stopped waiting.
+			if (err instanceof ToolAbortedError || signal?.aborted) {
+				return abortedToolResult(toolName);
+			}
 			return {
 				isError: true,
 				content: [
@@ -486,10 +535,14 @@ export class ChromeExecutionManager {
 	 * Close empty (`chrome://newtab/`, `about:blank`, `""`) MCP tab groups on session switch/exit.
 	 * Replicates `closeEmptyTabGroups` in `chunk-7m0pkhzw.js`.
 	 */
-	public async closeEmptyTabGroups(): Promise<number> {
+	public async closeEmptyTabGroups(budgetMs = 3000): Promise<number> {
 		if (this.trackedTabIds.size === 0) return 0;
 		const tracked = new Set(this.trackedTabIds);
 		this.trackedTabIds.clear();
+		// Session shutdown/switch awaits this; a stale socket must never hang Pi for
+		// (2s + 50 x 500ms) while the user is trying to quit.
+		const deadline = Date.now() + budgetMs;
+		const remaining = () => Math.max(0, deadline - Date.now());
 
 		try {
 			const ok = await this.pool.ensureConnected();
@@ -498,7 +551,7 @@ export class ChromeExecutionManager {
 			const resp = await this.pool.callTool(
 				"tabs_context_mcp",
 				{ createIfEmpty: false },
-				{ timeoutMs: 2000 },
+				{ timeoutMs: Math.min(2000, remaining()) },
 			);
 			const content = resp.result?.content;
 			if (!Array.isArray(content)) return 0;
@@ -529,8 +582,11 @@ export class ChromeExecutionManager {
 
 			let closedCount = 0;
 			for (const tab of tabs.slice(0, 50)) {
+				if (remaining() <= 0) break;
 				try {
-					await this.pool.callTool("tabs_close_mcp", { tabId: tab.tabId }, { timeoutMs: 500 });
+					await this.pool.callTool("tabs_close_mcp", { tabId: tab.tabId }, {
+						timeoutMs: Math.min(500, remaining()),
+					});
 					closedCount++;
 				} catch {
 					// Ignore
@@ -541,6 +597,25 @@ export class ChromeExecutionManager {
 			return 0;
 		}
 	}
+}
+
+/**
+ * Result Pi shows when the user pressed ESC (or Pi timed out) mid-call.
+ * The extension has no cancel method, so we can only stop waiting.
+ */
+function abortedToolResult(toolName: string): {
+	content: (TextContent | ImageContent)[];
+	isError: boolean;
+} {
+	return {
+		isError: true,
+		content: [
+			{
+				type: "text",
+				text: `Operation aborted (${toolName}): Pi stopped waiting for the Chrome extension. Chrome's extension exposes no cancel API, so an action already sent to the browser (click, navigation, or a \`computer\` wait) may still finish there.`,
+			},
+		],
+	};
 }
 
 /**
@@ -613,8 +688,11 @@ function makeTool<TParams extends TSchema>(
 			openWorldHint: true,
 			...annotations,
 		},
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			return manager.executeBrowserTool(shortName, params as Record<string, unknown>, ctx);
+		async execute(toolCallId, params, signal, _onUpdate, ctx) {
+			return manager.executeBrowserTool(shortName, params as Record<string, unknown>, ctx, {
+				signal,
+				toolCallId,
+			});
 		},
 		renderCall(args: any, theme: any, _context: ToolRenderContext) {
 			const summary = summarizeToolArgs(shortName, (args ?? {}) as Record<string, unknown>);
