@@ -61,6 +61,11 @@ export interface ExtensionToolResponse {
 	error?: {
 		content: ToolResultBlock[] | ToolResultBlock | string;
 	};
+	/**
+	 * Correlation id echoed back by the extension when the request carried
+	 * `params.tool_use_id` (see `kr3()` in the bundled `service-worker.js`).
+	 */
+	tool_use_id?: string;
 }
 
 export interface NotificationMessage {
@@ -93,6 +98,46 @@ export class SocketConnectionError extends Error {
 		super(message);
 		this.name = "SocketConnectionError";
 	}
+}
+
+/**
+ * Raised when a tool call gets no response within its timeout.
+ *
+ * Distinct from a plain `SocketConnectionError` so that `callTool` never retries
+ * it: a timed-out `computer` click or `navigate` may still have run in the
+ * browser, and re-sending it would duplicate the action.
+ */
+export class ToolTimeoutError extends SocketConnectionError {
+	constructor(message: string) {
+		super(message);
+		this.name = "ToolTimeoutError";
+	}
+}
+
+/**
+ * Raised when the caller's `AbortSignal` fires while a tool call is in flight.
+ *
+ * The Chrome extension has no cancel method, so the browser-side action may still
+ * run to completion; this error only stops Pi from waiting for it. The pending
+ * slot is kept as a "tombstone" so the eventual late response is discarded
+ * instead of being handed to the next tool call.
+ */
+export class ToolAbortedError extends Error {
+	constructor(message = "Tool call aborted by the user") {
+		super(message);
+		this.name = "ToolAbortedError";
+	}
+}
+
+/** A tool request that is on the wire, or a tombstone for one that was abandoned. */
+interface PendingToolCall {
+	requestId: string;
+	toolName: string;
+	/** True once the waiter was rejected (abort/timeout); the slot only swallows the late response. */
+	abandoned: boolean;
+	timer: ReturnType<typeof setTimeout> | null;
+	resolve: (response: ExtensionToolResponse) => void;
+	reject: (err: Error) => void;
 }
 
 /**
@@ -282,7 +327,13 @@ export class SocketClient {
 	private socket: net.Socket | null = null;
 	private connected = false;
 	private connecting = false;
-	private responseCallback: ((res: ExtensionToolResponse) => void) | null = null;
+	/**
+	 * In-flight tool calls keyed by request id (insertion ordered). Abandoned calls
+	 * stay in the map as tombstones until their late response arrives, so a stale
+	 * frame can never resolve a newer call.
+	 */
+	private readonly pendingCalls = new Map<string, PendingToolCall>();
+	private requestSeq = 0;
 	private notificationHandler: ((notification: NotificationMessage) => void) | null = null;
 	private responseBuffer = Buffer.alloc(0);
 	private reconnectAttempts = 0;
@@ -333,9 +384,18 @@ export class SocketClient {
 	public async callTool(
 		toolName: string,
 		args: Record<string, unknown>,
-		options?: { sessionScope?: string; timeoutMs?: number; relayInference?: boolean },
+		options?: {
+			sessionScope?: string;
+			timeoutMs?: number;
+			relayInference?: boolean;
+			signal?: AbortSignal;
+			requestId?: string;
+		},
 	): Promise<ExtensionToolResponse> {
 		const attemptCall = async (): Promise<ExtensionToolResponse> => {
+			if (options?.signal?.aborted) {
+				throw new ToolAbortedError(`Tool call '${toolName}' aborted before it was sent`);
+			}
 			const ok = await this.ensureConnected();
 			if (!ok) {
 				throw new SocketConnectionError(`Not connected to Chrome bridge socket at ${this.socketPath}`);
@@ -346,12 +406,105 @@ export class SocketClient {
 		try {
 			return await attemptCall();
 		} catch (err) {
-			if (err instanceof SocketConnectionError) {
+			// Never retry after an abort or a timeout: the action may already have run in
+			// Chrome, and retrying a destructive call (click/navigate) would duplicate it.
+			const retryable =
+				err instanceof SocketConnectionError &&
+				!(err instanceof ToolTimeoutError) &&
+				!options?.signal?.aborted;
+			if (retryable) {
 				this.logger.info(`Socket error during ${toolName}, reconnecting once and retrying...`);
 				this.closeSocket();
 				return await attemptCall();
 			}
 			throw err;
+		}
+	}
+
+	private nextRequestId(): string {
+		this.requestSeq += 1;
+		return `pi-${process.pid}-${this.requestSeq}`;
+	}
+
+	/** Drop a pending slot and its timeout timer. */
+	private removePending(requestId: string): void {
+		const entry = this.pendingCalls.get(requestId);
+		if (!entry) return;
+		if (entry.timer) {
+			clearTimeout(entry.timer);
+			entry.timer = null;
+		}
+		this.pendingCalls.delete(requestId);
+	}
+
+	/**
+	 * Keep an abandoned call's slot so its late response is swallowed, not delivered
+	 * to whichever call happens to be waiting next.
+	 */
+	private keepTombstone(requestId: string, ttlMs: number): void {
+		const entry = this.pendingCalls.get(requestId);
+		if (!entry) return;
+		entry.abandoned = true;
+		if (entry.timer) clearTimeout(entry.timer);
+		entry.timer = setTimeout(() => {
+			this.pendingCalls.delete(requestId);
+		}, ttlMs);
+		entry.timer.unref?.();
+
+		// Bound memory: evict the oldest tombstones beyond a safe cap.
+		const MAX_TOMBSTONES = 32;
+		if (this.pendingCalls.size > MAX_TOMBSTONES) {
+			for (const [id, pending] of this.pendingCalls) {
+				if (this.pendingCalls.size <= MAX_TOMBSTONES) break;
+				if (pending.abandoned) {
+					this.removePending(id);
+				}
+			}
+		}
+	}
+
+	/** Route one `tool_response` frame to its waiting call. */
+	private settleFromResponse(response: ExtensionToolResponse): void {
+		let entry: PendingToolCall | undefined;
+		const id = typeof response.tool_use_id === "string" ? response.tool_use_id : undefined;
+		if (id) {
+			entry = this.pendingCalls.get(id);
+			if (!entry) {
+				// Another session on this socket, or a response we already gave up on.
+				this.logger.debug(`Discarding response for unknown request ${id}`);
+				return;
+			}
+		} else {
+			// Older extension builds do not echo `tool_use_id`; fall back to FIFO order.
+			const head = this.pendingCalls.keys().next();
+			if (head.done) {
+				this.logger.debug("Discarding response with no pending tool call");
+				return;
+			}
+			entry = this.pendingCalls.get(head.value);
+		}
+		if (!entry) return;
+
+		const { requestId, abandoned, resolve } = entry;
+		this.removePending(requestId);
+		if (abandoned) {
+			this.logger.debug(`Discarding late response for abandoned request ${requestId}`);
+			return;
+		}
+		resolve(response);
+	}
+
+	/** Reject every in-flight call, e.g. when the socket dies. */
+	private failPendingCalls(err: Error): void {
+		const entries = Array.from(this.pendingCalls.values());
+		this.pendingCalls.clear();
+		for (const entry of entries) {
+			if (entry.timer) {
+				clearTimeout(entry.timer);
+				entry.timer = null;
+			}
+			if (entry.abandoned) continue;
+			entry.reject(err);
 		}
 	}
 
@@ -388,26 +541,68 @@ export class SocketClient {
 	private sendToolRequest(
 		toolName: string,
 		args: Record<string, unknown>,
-		options?: { sessionScope?: string; timeoutMs?: number; relayInference?: boolean },
+		options?: {
+			sessionScope?: string;
+			timeoutMs?: number;
+			relayInference?: boolean;
+			signal?: AbortSignal;
+			requestId?: string;
+		},
 	): Promise<ExtensionToolResponse> {
 		return new Promise<ExtensionToolResponse>((resolve, reject) => {
 			if (!this.socket || !this.connected) {
 				reject(new SocketConnectionError("Socket is not connected"));
 				return;
 			}
+			if (options?.signal?.aborted) {
+				reject(new ToolAbortedError(`Tool call '${toolName}' aborted before it was sent`));
+				return;
+			}
 
 			const timeoutMs = options?.timeoutMs ?? this.toolCallTimeoutMs;
-			const timer = setTimeout(() => {
-				if (this.responseCallback) {
-					this.responseCallback = null;
-					reject(new SocketConnectionError(`Tool call '${toolName}' timed out after ${timeoutMs}ms`));
-				}
-			}, timeoutMs);
+			const signal = options?.signal;
+			const requestId = options?.requestId ?? this.nextRequestId();
+			this.removePending(requestId);
 
-			this.responseCallback = (response: ExtensionToolResponse) => {
-				clearTimeout(timer);
-				resolve(response);
+			let settled = false;
+			const entry: PendingToolCall = {
+				requestId,
+				toolName,
+				abandoned: false,
+				timer: null,
+				resolve: (response) => {
+					if (settled) return;
+					settled = true;
+					signal?.removeEventListener("abort", onAbort);
+					resolve(response);
+				},
+				reject: (err) => {
+					if (settled) return;
+					settled = true;
+					signal?.removeEventListener("abort", onAbort);
+					reject(err);
+				},
 			};
+
+			const onAbort = () => {
+				if (settled) return;
+				entry.abandoned = true;
+				entry.reject(new ToolAbortedError(`Tool call '${toolName}' aborted by the user`));
+				this.keepTombstone(requestId, timeoutMs);
+			};
+
+			entry.timer = setTimeout(() => {
+				if (settled) return;
+				entry.abandoned = true;
+				entry.reject(
+					new ToolTimeoutError(`Tool call '${toolName}' timed out after ${timeoutMs}ms`),
+				);
+				this.keepTombstone(requestId, timeoutMs);
+			}, timeoutMs);
+			entry.timer.unref?.();
+
+			this.pendingCalls.set(requestId, entry);
+			signal?.addEventListener("abort", onAbort, { once: true });
 
 			const sessionScope = options?.sessionScope ?? this.sessionScope;
 			const requestPayload = JSON.stringify({
@@ -416,6 +611,9 @@ export class SocketClient {
 					client_id: this.clientId,
 					tool: toolName,
 					args,
+					// The extension echoes this back on the matching `tool_response`,
+					// which is what makes abort/parallel calls safe to correlate.
+					tool_use_id: requestId,
 					...(sessionScope ? { session_scope: sessionScope } : {}),
 					// Advertise that this host can answer `inference_request`
 					// notifications, so the extension routes model samples here.
@@ -430,9 +628,8 @@ export class SocketClient {
 
 			this.socket.write(frame, (err) => {
 				if (err) {
-					clearTimeout(timer);
-					this.responseCallback = null;
-					reject(new SocketConnectionError(`Failed to write to socket: ${err.message}`));
+					this.removePending(requestId);
+					entry.reject(new SocketConnectionError(`Failed to write to socket: ${err.message}`));
 				}
 			});
 		});
@@ -491,9 +688,7 @@ export class SocketClient {
 						if (parsed && typeof parsed === "object" && "method" in parsed && !("result" in parsed) && !("error" in parsed)) {
 							this.notificationHandler?.(parsed as NotificationMessage);
 						} else if ("result" in parsed || "error" in parsed) {
-							const cb = this.responseCallback;
-							this.responseCallback = null;
-							cb?.(parsed as ExtensionToolResponse);
+							this.settleFromResponse(parsed as ExtensionToolResponse);
 						}
 					} catch (err: any) {
 						this.logger.error(`Failed to parse frame JSON: ${err.message}`);
@@ -503,15 +698,8 @@ export class SocketClient {
 
 			this.socket.on("error", (err: NodeJS.ErrnoException) => {
 				clearTimeout(connectTimer);
-				if (this.responseCallback) {
-					const cb = this.responseCallback;
-					this.responseCallback = null;
-					cb({
-						error: {
-							content: [{ type: "text", text: `Socket error: ${err.message}` }],
-						},
-					});
-				}
+				this.failPendingCalls(new SocketConnectionError(`Socket error: ${err.message}`));
+				this.pendingCalls.clear();
 				this.connected = false;
 				this.connecting = false;
 				if (err.code && ["ECONNREFUSED", "ECONNRESET", "EPIPE", "ENOENT"].includes(err.code)) {
@@ -526,6 +714,7 @@ export class SocketClient {
 				clearTimeout(connectTimer);
 				this.connected = false;
 				this.connecting = false;
+				this.failPendingCalls(new SocketConnectionError(`Socket ${this.socketPath} closed`));
 				if (!this.disableAutoReconnect) {
 					this.scheduleReconnect();
 				}
@@ -563,7 +752,8 @@ export class SocketClient {
 		}
 		this.connected = false;
 		this.connecting = false;
-		this.responseCallback = null;
+		this.failPendingCalls(new SocketConnectionError(`Socket ${this.socketPath} closed`));
+		this.pendingCalls.clear();
 		this.responseBuffer = Buffer.alloc(0);
 	}
 
@@ -641,8 +831,11 @@ export class SocketPool extends EventEmitter {
 	public async callTool(
 		toolName: string,
 		args: Record<string, unknown>,
-		options?: { timeoutMs?: number },
+		options?: { timeoutMs?: number; signal?: AbortSignal; requestId?: string },
 	): Promise<ExtensionToolResponse> {
+		if (options?.signal?.aborted) {
+			throw new ToolAbortedError(`Tool call '${toolName}' aborted before it was sent`);
+		}
 		if (toolName === "tabs_context_mcp") {
 			return this.callTabsContext(args, options);
 		}
@@ -657,6 +850,8 @@ export class SocketPool extends EventEmitter {
 						sessionScope: this.sessionScope,
 						timeoutMs: options?.timeoutMs,
 						relayInference: this.relayInference,
+						signal: options?.signal,
+						requestId: options?.requestId,
 					});
 				}
 			}
@@ -670,6 +865,8 @@ export class SocketPool extends EventEmitter {
 					sessionScope: this.sessionScope,
 					timeoutMs: options?.timeoutMs,
 					relayInference: this.relayInference,
+					signal: options?.signal,
+					requestId: options?.requestId,
 				});
 			}
 		}
@@ -735,7 +932,7 @@ export class SocketPool extends EventEmitter {
 	 */
 	private async callTabsContext(
 		args: Record<string, unknown>,
-		options?: { timeoutMs?: number },
+		options?: { timeoutMs?: number; signal?: AbortSignal; requestId?: string },
 	): Promise<ExtensionToolResponse> {
 		this.refreshClients();
 		if (this.clients.size === 0) {
@@ -751,6 +948,8 @@ export class SocketPool extends EventEmitter {
 			const response = await client.callTool("tabs_context_mcp", args, {
 				sessionScope: this.sessionScope,
 				timeoutMs: options?.timeoutMs,
+				signal: options?.signal,
+				requestId: options?.requestId,
 			});
 			this.updateTabRoutesFromResponse(response, sockPath);
 			return response;
@@ -758,12 +957,14 @@ export class SocketPool extends EventEmitter {
 
 		// Multi-socket parallel aggregation
 		const settled = await Promise.allSettled(
-			Array.from(this.clients.entries()).map(async ([sockPath, client]) => {
+			Array.from(this.clients.entries()).map(async ([sockPath, client], index) => {
 				const ok = await client.ensureConnected();
 				if (!ok) throw new SocketConnectionError(`Not connected: ${sockPath}`);
 				const response = await client.callTool("tabs_context_mcp", args, {
 					sessionScope: this.sessionScope,
 					timeoutMs: options?.timeoutMs,
+					signal: options?.signal,
+					requestId: options?.requestId ? `${options.requestId}:${index}` : undefined,
 				});
 				return { sockPath, response };
 			}),
