@@ -96,6 +96,20 @@ export class SocketConnectionError extends Error {
 }
 
 /**
+ * A tool call got no response frame in time.
+ *
+ * Kept distinct from {@link SocketConnectionError} on purpose: the socket can be
+ * perfectly healthy and the page just busy, so the reconnect-and-retry path must
+ * not tear down a socket that another queued call is about to use.
+ */
+export class ToolCallTimeoutError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "ToolCallTimeoutError";
+	}
+}
+
+/**
  * Resolve sanitized username used in socket path (`/tmp/claude-mcp-browser-bridge-<user>`).
  * Replicates `hQt()` / `n2t()` in `chunk-rf49jb1h.js`.
  */
@@ -274,6 +288,14 @@ export interface SocketClientOptions {
 	toolCallTimeoutMs?: number;
 }
 
+/** One in-flight `execute_tool` request awaiting its (unidentified) response frame. */
+interface PendingToolRequest {
+	toolName: string;
+	resolve: (res: ExtensionToolResponse) => void;
+	reject: (err: Error) => void;
+	timer: ReturnType<typeof setTimeout>;
+}
+
 /**
  * Single-socket client speaking 4-byte UInt32LE length-prefixed JSON frames to a Chrome Native Host.
  * Replicates `class k` (`wKt`) in `chunk-dygr1ker.js`.
@@ -282,7 +304,16 @@ export class SocketClient {
 	private socket: net.Socket | null = null;
 	private connected = false;
 	private connecting = false;
-	private responseCallback: ((res: ExtensionToolResponse) => void) | null = null;
+	/**
+	 * FIFO of tool requests awaiting a response frame.
+	 *
+	 * Response frames carry no request id, so the only way to pair a response with
+	 * its caller is ordering: keep at most one request in flight per socket and
+	 * dispatch responses first-in-first-out (see `sendToolRequest`).
+	 */
+	private pendingRequests: PendingToolRequest[] = [];
+	/** Tail of the FIFO gate that keeps one frame in flight per socket (see `withSendLock`). */
+	private sendLockTail: Promise<void> = Promise.resolve();
 	private notificationHandler: ((notification: NotificationMessage) => void) | null = null;
 	private responseBuffer = Buffer.alloc(0);
 	private reconnectAttempts = 0;
@@ -385,7 +416,42 @@ export class SocketClient {
 		});
 	}
 
+	/**
+	 * Serialize tool requests per socket. Concurrent `execute_tool` frames on one
+	 * socket would otherwise share the response slot: the bridge answers in order,
+	 * so the second caller would consume the first caller's response while the
+	 * first one waited forever.
+	 */
 	private sendToolRequest(
+		toolName: string,
+		args: Record<string, unknown>,
+		options?: { sessionScope?: string; timeoutMs?: number; relayInference?: boolean },
+	): Promise<ExtensionToolResponse> {
+		return this.withSendLock(() => this.sendToolRequestNow(toolName, args, options));
+	}
+
+	/**
+	 * Run one request at a time per socket, in call order.
+	 *
+	 * The gate never rejects, so a failed request cannot strand its followers, and
+	 * `release` runs in a `finally`, so every waiter is eventually admitted.
+	 */
+	private async withSendLock<T>(run: () => Promise<T>): Promise<T> {
+		let release!: () => void;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const previous = this.sendLockTail;
+		this.sendLockTail = previous.then(() => held);
+		await previous;
+		try {
+			return await run();
+		} finally {
+			release();
+		}
+	}
+
+	private sendToolRequestNow(
 		toolName: string,
 		args: Record<string, unknown>,
 		options?: { sessionScope?: string; timeoutMs?: number; relayInference?: boolean },
@@ -397,17 +463,20 @@ export class SocketClient {
 			}
 
 			const timeoutMs = options?.timeoutMs ?? this.toolCallTimeoutMs;
-			const timer = setTimeout(() => {
-				if (this.responseCallback) {
-					this.responseCallback = null;
-					reject(new SocketConnectionError(`Tool call '${toolName}' timed out after ${timeoutMs}ms`));
-				}
-			}, timeoutMs);
-
-			this.responseCallback = (response: ExtensionToolResponse) => {
-				clearTimeout(timer);
-				resolve(response);
+			const pending: PendingToolRequest = {
+				toolName,
+				resolve,
+				reject,
+				timer: setTimeout(() => {
+					if (!this.settlePending(pending)) return;
+					// The bridge may still send this request's response later, and frames
+					// carry no request id: closing the socket is the only way to keep a
+					// stale frame from being handed to the next caller.
+					this.closeSocket();
+					reject(new ToolCallTimeoutError(`Tool call '${toolName}' timed out after ${timeoutMs}ms`));
+				}, timeoutMs),
 			};
+			this.pendingRequests.push(pending);
 
 			const sessionScope = options?.sessionScope ?? this.sessionScope;
 			const requestPayload = JSON.stringify({
@@ -429,13 +498,39 @@ export class SocketClient {
 			const frame = Buffer.concat([headerBuf, payloadBuf]);
 
 			this.socket.write(frame, (err) => {
-				if (err) {
-					clearTimeout(timer);
-					this.responseCallback = null;
+				if (err && this.settlePending(pending)) {
 					reject(new SocketConnectionError(`Failed to write to socket: ${err.message}`));
 				}
 			});
 		});
+	}
+
+	/** Remove a pending request from the queue; false when it was already settled. */
+	private settlePending(pending: PendingToolRequest): boolean {
+		const index = this.pendingRequests.indexOf(pending);
+		if (index === -1) return false;
+		this.pendingRequests.splice(index, 1);
+		clearTimeout(pending.timer);
+		return true;
+	}
+
+	/** Resolve the oldest pending request with the frame that just arrived. */
+	private dispatchResponse(response: ExtensionToolResponse): boolean {
+		const pending = this.pendingRequests.shift();
+		if (!pending) return false;
+		clearTimeout(pending.timer);
+		pending.resolve(response);
+		return true;
+	}
+
+	/** Fail every pending request so no caller can be left hanging. */
+	private failPendingRequests(message: string): void {
+		const pending = this.pendingRequests;
+		this.pendingRequests = [];
+		for (const request of pending) {
+			clearTimeout(request.timer);
+			request.reject(new SocketConnectionError(message));
+		}
 	}
 
 	private async connect(): Promise<void> {
@@ -491,9 +586,9 @@ export class SocketClient {
 						if (parsed && typeof parsed === "object" && "method" in parsed && !("result" in parsed) && !("error" in parsed)) {
 							this.notificationHandler?.(parsed as NotificationMessage);
 						} else if ("result" in parsed || "error" in parsed) {
-							const cb = this.responseCallback;
-							this.responseCallback = null;
-							cb?.(parsed as ExtensionToolResponse);
+							if (!this.dispatchResponse(parsed as ExtensionToolResponse)) {
+								this.logger.warn("Received a tool response with no pending request");
+							}
 						}
 					} catch (err: any) {
 						this.logger.error(`Failed to parse frame JSON: ${err.message}`);
@@ -503,10 +598,12 @@ export class SocketClient {
 
 			this.socket.on("error", (err: NodeJS.ErrnoException) => {
 				clearTimeout(connectTimer);
-				if (this.responseCallback) {
-					const cb = this.responseCallback;
-					this.responseCallback = null;
-					cb({
+				this.responseBuffer = Buffer.alloc(0);
+				for (;;) {
+					const failed = this.pendingRequests.shift();
+					if (!failed) break;
+					clearTimeout(failed.timer);
+					failed.resolve({
 						error: {
 							content: [{ type: "text", text: `Socket error: ${err.message}` }],
 						},
@@ -526,6 +623,7 @@ export class SocketClient {
 				clearTimeout(connectTimer);
 				this.connected = false;
 				this.connecting = false;
+				this.failPendingRequests("Socket closed before the tool response arrived");
 				if (!this.disableAutoReconnect) {
 					this.scheduleReconnect();
 				}
@@ -563,7 +661,7 @@ export class SocketClient {
 		}
 		this.connected = false;
 		this.connecting = false;
-		this.responseCallback = null;
+		this.failPendingRequests("Socket closed before the tool response arrived");
 		this.responseBuffer = Buffer.alloc(0);
 	}
 
